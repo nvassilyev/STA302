@@ -1,0 +1,494 @@
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(car)
+library(leaps)
+library(carData)
+library(gridExtra)
+library(MASS)
+```
+
+Load data in:
+```{r}
+n_crime <- read.csv("Neighbourhood_Crime_Rates_2020.csv")
+n_profiles <- read.csv("neighbourhood-profiles-2016-csv.csv")
+```
+
+Cleaning dataset:
+```{r}
+x <- n_crime[, !grepl("Rate", names(n_crime))]
+x <- x[, grepl("2016", names(x))]
+
+
+x$total_crime <- rowSums(x)
+x$hood_id <- n_crime$Hood_ID
+
+x <- select(x, hood_id, total_crime)
+
+filter <- n_profiles %>% filter(X_id == 1 | X_id == 3 | 
+                        X_id == 11 |
+                        X_id == 1030 | X_id == 1153| 
+                        X_id == 1676 | X_id ==  1689 |
+                        X_id == 1704 | X_id ==  1890) %>%
+  select(-X_id, -Category, -Topic, -Data.Source, -Characteristic, 
+         -City.of.Toronto)
+
+profilesfilter.transpose <- as.data.frame(t(as.matrix(filter)))
+profiles <- tibble::rownames_to_column(filter.transpose, "Name") 
+
+                                               
+colnames(profiles) <- c("Name", "hood_id", "population",  
+                        "total_youth","average_income","total_migrants",
+                        "postsecondary_education", "rate_unaffordablehousing",
+                        "no_diploma", "Employment_rate")
+
+df <- merge(profiles, x, by = "hood_id")
+df <- transform(df, 
+        population = as.integer(gsub(",","", population)), 
+        total_migrants = as.integer(gsub(",","", total_migrants)),
+        total_youth = as.integer(gsub(",","", total_youth)),
+        average_income = as.integer(gsub(",","", average_income)),
+        postsecondary_education = as.integer(gsub(",","", postsecondary_education)),
+        rate_unaffordablehousing = as.integer(gsub(",","", rate_unaffordablehousing)),
+        no_diploma = as.integer(gsub(",","", no_diploma)),
+        Employment_rate = as.integer(gsub(",","", Employment_rate)))
+```
+
+Visualization:
+```{r}
+#Response variable
+plt1 <- ggplot(df, aes(x=total_crime)) +
+    geom_histogram(binwidth=45, colour="black", fill="white") + labs(title = "Total Crime Occurences per Neighbourhood") + theme(plot.title = element_text(hjust = 0.5)) + xlab("Total Crime") + ylab("Count") +
+   geom_vline(xintercept=mean(df$total_crime), color = "red")
+
+#Population (predictor)
+plt2 <- ggplot(df, aes(x=population, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood population") + xlab("population") +
+  ylab("Total Crime")
+
+#Average income (predictor)
+plt3 <- ggplot(df, aes(x=average_income, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood average income") + xlab("average income") +
+  ylab("Total Crime")
+
+#Total youth (predictor)
+plt4 <- ggplot(df, aes(x=total_youth, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood youth population") + xlab("youth population") +
+  ylab("Total Crime")
+
+#Total Migrants (predictor)
+plt5 <- ggplot(df, aes(x=total_migrants, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood total migrants") + xlab("total migrants") +
+  ylab("Total Crime")
+
+#Rate of unaffordable housing (predictor)
+plt6 <- ggplot(df, aes(x=rate_unaffordablehousing, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood rate of unaffordable housing") + xlab("rate of unaffordable housing") +
+  ylab("Total Crime")
+
+#No diploma (predictor)
+plt7 <- ggplot(df, aes(x=no_diploma, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by total amount of people with no diploma") + xlab("number of people with no diploma") +
+  ylab("Total Crime")
+
+#Employment rate (predictor)
+plt8 <- ggplot(df, aes(x=Employment_rate, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood employment rate") + xlab("employment rate") +
+  ylab("Total Crime")
+
+plt1
+plt2
+plt3
+plt4
+plt5
+plt6
+plt7
+plt8
+#grid.arrange(plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, nrow=3)
+```
+
+Check for multicollinearity:
+
+```{r}
+fm = lm(total_crime ~ population + average_income
+        + total_youth +
+                total_migrants +
+                rate_unaffordablehousing + no_diploma +
+                Employment_rate, df)
+vif(fm)
+```
+
+Reduced model
+```{r}
+rm = lm(total_crime ~ population + average_income +
+                rate_unaffordablehousing +
+                Employment_rate, df)
+vif(rm)
+```
+
+
+Split dataset:
+```{r}
+set.seed(101)  
+smp_size <- floor(0.6 * nrow(df))
+train_ind <- sample(seq_len(nrow(df)), size = smp_size)
+train <- df[train_ind, ]
+test  <- df[-train_ind, ]
+```
+
+Train model and Check condition 1 and Condition 2:
+```{r}
+train_fm <- lm(total_crime ~ population + average_income +
+                rate_unaffordablehousing +
+                Employment_rate, train)
+
+plot(train$total_crime ~ fitted(train_fm), main="Total Crime: Actual versus Fitted", xlab="Fitted", ylab="Actual")
+abline(a = 0, b = 1)
+lines(lowess(train$total_crime ~ fitted(train_fm)), lty=2)
+
+pairs(train[, c(3,5,8,10)])
+```
+Condition 1 and 2 is satsified:
+
+Model Assumptions:
+```{r}
+r <- resid(train_fm)
+
+plot(r ~ fitted(train_fm), main="Residuals vs Fitted", xlab="Fitted", ylab="res.")
+abline(0,0)
+
+qqnorm(r, main="Normal Q-Q", xlab="Theoretical Quantiles", ylab="Standardized Residuals")
+qqline(r)
+```
+Seems we have constant variance, but linearity and normality are not satisfied.
+
+Transformations
+
+```{r}
+model <- powerTransform(train_fm)
+m1 <- powerTransform(train[,c(3,5,8,10)])
+summary(model)
+summary(m1)
+
+```
+
+```{r}
+log_model <- lm(log(total_crime) ~ log(population) + log(average_income) +
+                log(rate_unaffordablehousing) +
+                log(Employment_rate), train)
+
+r_log <- resid(log_model)
+
+plot(r_log ~ fitted(log_model), main="Residuals vs Fitted (Transformed)", xlab="Fitted", ylab="res.")
+abline(0,0)
+
+qqnorm(r_log, main="Normal Q-Q  (Transformed)", xlab="Theoretical Quantiles", ylab="Standardized Residuals")
+qqline(r_log)
+
+```
+
+Assumptions are now satisfied!
+
+Model Selection:
+
+Backwards selection with AIC, BIC, R^2
+```{r}
+BIC(log_model)
+AIC(log_model)
+summary(log_model)
+vif(log_model)
+```
+
+
+```{r}
+lm_no_employment <- lm(log(total_crime) ~ log(population) + log(average_income) +
+                log(rate_unaffordablehousing), train)
+BIC(lm_no_employment)
+AIC(lm_no_employment)
+summary(lm_no_employment)
+vif(lm_no_employment)
+
+lm_no_ratehousing <- lm(log(total_crime) ~ log(population) + log(average_income) +
+                log(Employment_rate), train)
+BIC(lm_no_ratehousing)
+AIC(lm_no_ratehousing)
+summary(lm_no_ratehousing)
+vif(lm_no_ratehousing)
+
+lm_no_income <- lm(log(total_crime) ~ log(population) + log(Employment_rate) +
+                log(rate_unaffordablehousing), train)
+BIC(lm_no_income)
+AIC(lm_no_income )
+summary(lm_no_income)
+vif(lm_no_income )
+
+lm_no_population <- lm(log(total_crime) ~ log(Employment_rate) + log(average_income) +
+                log(rate_unaffordablehousing), train)
+BIC(lm_no_population)
+AIC(lm_no_population)
+summary(lm_no_population)
+vif(lm_no_population)
+```
+
+Choose model without employment rate predictor:
+```{r}
+lm_no_ratehousing <- lm(log(total_crime) ~ log(population) + log(average_income), train)
+BIC(lm_no_ratehousing)
+AIC(lm_no_ratehousing)
+summary(lm_no_ratehousing)
+vif(lm_no_ratehousing)
+
+lm_no_income <- lm(log(total_crime) ~ log(population) + 
+                log(rate_unaffordablehousing), train)
+BIC(lm_no_income)
+AIC(lm_no_income )
+summary(lm_no_income)
+vif(lm_no_income )
+
+lm_no_population <- lm(log(total_crime) ~ log(average_income) +
+                log(rate_unaffordablehousing), train)
+BIC(lm_no_population)
+AIC(lm_no_population)
+summary(lm_no_population)
+vif(lm_no_population)
+```
+Original model:
+BIC = 149.8493
+AIC = 133.9256
+R^2 = 0.6101
+
+Model with no employment rate predictor:
+BIC = 145.1965
+AIC = 131.9266
+R^2 = 0.614
+
+Next step in backwards selection does not produce a better model
+Re-check assumptions:
+```{r}
+rm <- lm(log(total_crime) ~ log(population) + log(average_income) +
+                log(rate_unaffordablehousing), train)
+
+r_rm <- resid(rm)
+
+plot(r_rm ~ fitted(log_model), main="Residuals vs Fitted (Transformed)", xlab="Fitted", ylab="res.")
+abline(0,0)
+
+qqnorm(r_rm, main="Normal Q-Q", xlab="Theoretical Quantiles", ylab="Standardized Residuals (Transformed)")
+qqline(r_rm)
+vif(rm)
+summary(rm)
+```
+
+Assumptions still hold.
+
+Automated Selection:
+```{r}
+stepAIC(log_model,
+scope=list(upper=log_model),
+direction = "both", k=2)
+```
+Produced same model!
+
+Outliers, Leverage, and Influential points:
+
+Leverage:
+```{r}
+n <- length(train$total_crime)
+p <- 3
+
+h <- hatvalues(rm)
+leverage <- which(h > 2*(p+1)/n)
+length(leverage)
+
+
+plot(log(train$total_crime) ~ log(train$population),
+     main = "log(total crime) vs log(population)",
+     xlab="log(population)", ylab="log(total crime)")
+points(log(train[leverage, 11]) ~ log(train[leverage, 3]), col="red", pch=19)
+plot(log(train$total_crime) ~ log(train$average_income),
+     main = "log(total crime) vs log(avg income)",
+     xlab="log(avg income)", ylab="log(total crime)")
+points(log(train[leverage, 11]) ~ log(train[leverage, 5]), col="red", pch=19)
+plot(log(train$total_crime) ~ log(train$rate_unaffordablehousing),
+     main = "log(total crime) vs log(rate unaffordable housing)",
+     xlab="log(rate unaffordable housing)", ylab="log(total crime)")
+points(log(train[leverage,11]) ~ log(train[leverage, 8]), col="red", pch=19)
+
+```
+Outliers:
+```{r}
+rs <- rstandard(rm)
+outliers <- which(rs < -2 | rs > 2) #small dataset
+length(outliers)
+
+plot(log(train$total_crime) ~ log(train$population),
+     main = "log(total crime) vs log(population)",
+     xlab="log(population)", ylab="log(total crime)")
+points(log(train[outliers, 11]) ~ log(train[outliers, 3]), col="red", pch=19)
+plot(log(train$total_crime) ~ log(train$average_income),
+     main = "log(total crime) vs log(avg income)",
+     xlab="log(avg income)", ylab="log(total crime)")
+points(log(train[outliers, 11]) ~ log(train[outliers, 5]), col="red", pch=19)
+plot(log(train$total_crime) ~ log(train$rate_unaffordablehousing),
+     main = "log(total crime) vs log(rate unaffordable housing)",
+     xlab="log(rate unaffordable housing)", ylab="log(total crime)")
+points(log(train[outliers,11]) ~ log(train[outliers, 8]), col="red", pch=19)
+```
+Influential points:
+```{r}
+Dcutoff <- qf(0.5, p+1, n-p-1)
+D <- cooks.distance(rm)
+which(D > Dcutoff) 
+
+# find the DFFITS and compare to cutoff
+DFFITScut <- 2*sqrt((p+1)/n)
+dfs <- dffits(rm)
+w3 <- which(abs(dfs) > DFFITScut)
+w3
+
+# find the DFBETAS and compare to cutoff (notice the dimension of DFBETAS)
+DFBETAcut <- 2/sqrt(n)
+dfb <- dfbetas(rm)
+
+w4 <- which(abs(dfb[,1]) > DFBETAcut)
+w5 <- which(abs(dfb[,2]) > DFBETAcut)
+w6 <- which(abs(dfb[,3]) > DFBETAcut)
+w7 <- which(abs(dfb[,4]) > DFBETAcut)
+w <- unique(c(w3, w4, w5, w6, w7))
+length(w)
+
+plot(log(train$total_crime) ~ log(train$population),
+     main = "log(total crime) vs log(population)",
+     xlab="log(population)", ylab="log(total crime)")
+points(log(train[w, 11]) ~ log(train[w, 3]), col="red", pch=19)
+plot(log(train$total_crime) ~ log(train$average_income),
+     main = "log(total crime) vs log(avg income)",
+     xlab="log(avg income)", ylab="log(total crime)")
+points(log(train[w, 11]) ~ log(train[w, 5]), col="red", pch=19)
+plot(log(train$total_crime) ~ log(train$rate_unaffordablehousing),
+     main = "log(total crime) vs log(rate unaffordable housing)",
+     xlab="log(rate unaffordable housing)", ylab="log(total crime)")
+points(log(train[w,11]) ~ log(train[w, 8]), col="red", pch=19)
+```
+Visualization of test set:
+```{r}
+plt1 <- ggplot(test, aes(x=total_crime)) +
+    geom_histogram(binwidth=45, colour="black", fill="white") + labs(title = "Total Crime Occurences per Neighbourhood") + theme(plot.title = element_text(hjust = 0.5)) + xlab("Total Crime") + ylab("Count") +
+   geom_vline(xintercept=mean(df$total_crime), color = "red")
+
+#Population (predictor)
+plt2 <- ggplot(test, aes(x=population, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood population") + xlab("population") +
+  ylab("Total Crime")
+
+#Average income (predictor)
+plt3 <- ggplot(test, aes(x=average_income, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood average income") + xlab("average income") +
+  ylab("Total Crime")
+
+#Total youth (predictor)
+plt4 <- ggplot(test, aes(x=total_youth, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood youth population") + xlab("youth population") +
+  ylab("Total Crime")
+
+#Total Migrants (predictor)
+plt5 <- ggplot(test, aes(x=total_migrants, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood total migrants") + xlab("total migrants") +
+  ylab("Total Crime")
+
+#Rate of unaffordable housing (predictor)
+plt6 <- ggplot(test, aes(x=rate_unaffordablehousing, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood rate of unaffordable housing") + xlab("rate of unaffordable housing") +
+  ylab("Total Crime")
+
+#No diploma (predictor)
+plt7 <- ggplot(test, aes(x=no_diploma, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by total amount of people with no diploma") + xlab("number of people with no diploma") +
+  ylab("Total Crime")
+
+#Employment rate (predictor)
+plt8 <- ggplot(test, aes(x=Employment_rate, y=total_crime)) +
+  geom_point() + labs(title = "Total Crime Occurences by neighbourhood employment rate") + xlab("employment rate") +
+  ylab("Total Crime")
+
+plt1
+plt2
+plt3
+plt4
+plt5
+plt6
+plt7
+plt8
+#grid.arrange(plt1, plt2, plt3, plt4, plt5, plt6, plt7, plt8, nrow=3)
+```
+
+Validation:
+```{r}
+log_model_test <- lm(log(total_crime) ~ log(population) + log(average_income) +
+                log(rate_unaffordablehousing), test)
+summary(rm)
+summary(log_model_test)
+vif(rm)
+vif(log_model_test)
+```
+
+```{r}
+r_log_test <- resid(log_model_test)
+plot(r_log_test ~ fitted(log_model_test), main="Residuals vs Fitted", xlab="Fitted", ylab="res.")
+abline(0,0)
+
+qqnorm(r_log_test, main="Normal Q-Q", xlab="Theoretical Quantiles", ylab="Standardized Residuals")
+qqline(r_log_test)
+
+log_model_test_full <- lm(log(total_crime) ~ log(population) + log(average_income) +
+                log(rate_unaffordablehousing) +
+                log(Employment_rate), test)
+
+stepAIC(log_model_test_full,
+scope=list(upper=log_model_test_full),
+direction = "both", k=2)
+```
+Outliers, Leverage, and Influential points of testing model:
+
+```{r}
+n <- length(test$total_crime)
+p <- 3
+
+h <- hatvalues(log_model_test)
+leverage <- which(h > 2*(p+1)/n)
+length(leverage)
+
+rs <- rstandard(log_model_test)
+outliers <- which(rs < -2 | rs > 2) #small dataset
+length(outliers)
+
+Dcutoff <- qf(0.5, p+1, n-p-1)
+D <- cooks.distance(log_model_test)
+which(D > Dcutoff) 
+
+# find the DFFITS and compare to cutoff
+DFFITScut <- 2*sqrt((p+1)/n)
+dfs <- dffits(log_model_test)
+w3 <- which(abs(dfs) > DFFITScut)
+w3
+
+# find the DFBETAS and compare to cutoff (notice the dimension of DFBETAS)
+DFBETAcut <- 2/sqrt(n)
+dfb <- dfbetas(rm)
+
+w4 <- which(abs(dfb[,1]) > DFBETAcut)
+w5 <- which(abs(dfb[,2]) > DFBETAcut)
+w6 <- which(abs(dfb[,3]) > DFBETAcut)
+w7 <- which(abs(dfb[,4]) > DFBETAcut)
+w <- unique(c(w3, w4, w5, w6, w7))
+length(w)
+```
+
+
+
+
+
+
+
+
